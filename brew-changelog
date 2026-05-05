@@ -60,15 +60,35 @@ for v in urls.values():
 print_releases() {
     local from="$1" to="$2" repo="$3"
     python3 -c '
-import sys, json
+import sys, json, textwrap, shutil, re
 
 from_ver, to_ver, repo = sys.argv[1], sys.argv[2], sys.argv[3]
+BASE = "  "
+term_width = max(40, shutil.get_terminal_size((80, 24)).columns)
 
 def norm(v):
     """Extract semantic version, handling v-prefix and pkg@ver monorepo tags."""
     if "@" in v:
         v = v.rsplit("@", 1)[-1]
     return v.lstrip("v")
+
+def print_wrapped(line):
+    if not line.strip():
+        print()
+        return
+    stripped = line.lstrip()
+    leading = line[:len(line) - len(stripped)]
+    # Hanging indent: continuation lines align past any bullet marker
+    m = re.match(r"^([-*+]|\d+\.)\s+", stripped)
+    hang = " " * len(m.group(0)) if m else ""
+    print(textwrap.fill(
+        stripped,
+        width=term_width,
+        initial_indent=BASE + leading,
+        subsequent_indent=BASE + leading + hang,
+        break_long_words=False,
+        break_on_hyphens=False,
+    ))
 
 releases = json.load(sys.stdin)
 collecting = False
@@ -93,9 +113,19 @@ for r in releases:
         break
 
     body = (r.get("body") or "").strip() or "(no release notes)"
-    print(f"  [{tag}]")
+    raw_date = (r.get("published_at") or r.get("created_at") or "")[:10]
+    if raw_date:
+        from datetime import date as _date
+        days = (_date.today() - _date.fromisoformat(raw_date)).days
+        plural = "s" if days != 1 else ""
+        age = f"{days} day{plural} ago"
+        date_str = f"{raw_date} ({age})"
+    else:
+        date_str = ""
+    header = f"  [{tag}]  {date_str}" if date_str else f"  [{tag}]"
+    print(header)
     for line in body.splitlines():
-        print(f"  {line}")
+        print_wrapped(line)
     print()
     shown += 1
 

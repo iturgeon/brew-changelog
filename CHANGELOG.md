@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-05
+
+### Added
+
+- Release date and relative age (e.g. `2026-05-03 (2 days ago)`) shown on each version header
+- Terminal-width-aware line wrapping with hanging indent that respects bullet markers and nesting levels
+
 ## [0.1.0] - 2026-05-05
 
 ### Added
@@ -20,4 +27,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GITHUB_TOKEN` support to raise GitHub API rate limit from 60 to 5000 req/hr
 - Graceful fallbacks: shows homepage URL when no GitHub repo or releases can be found
 
+[0.2.0]: https://github.com/iturgeon/brew-changelog/releases/tag/v0.2.0
 [0.1.0]: https://github.com/iturgeon/brew-changelog/releases/tag/v0.1.0
