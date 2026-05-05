@@ -6,7 +6,7 @@ A Homebrew external command that shows changelogs between your currently install
 brew changelog [formula ...]
 ```
 
-![Example output showing aws-vault changelog between versions](https://github.com/user-attachments/assets/placeholder)
+![brew changelog aws-vault output showing version headers with dates and wrapped release notes](screenshot.png)
 
 ## Features
 
