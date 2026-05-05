@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# brew-changelog — show changelogs between installed and available Homebrew package versions
+# Usage: brew changelog [formula ...]
+#        GITHUB_TOKEN=ghp_... brew changelog   (avoids rate limiting)
+
+set -uo pipefail
+
+BOLD=$(tput bold 2>/dev/null || printf '')
+RESET=$(tput sgr0 2>/dev/null || printf '')
+CYAN=$(tput setaf 6 2>/dev/null || printf '')
+DIM=$(tput dim 2>/dev/null || printf '')
+YELLOW=$(tput setaf 3 2>/dev/null || printf '')
+
+die() { printf 'brew-changelog: %s\n' "$*" >&2; exit 1; }
+
+command -v jq &>/dev/null || die "jq is required — install with: brew install jq"
+
+github_api() {
+    curl -sf \
+        ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+        -H "Accept: application/vnd.github+json" \
+        "$1"
+}
+
+extract_github_repo() {
+    if [[ "$1" =~ github\.com[/:]([^/]+)/([^/.]+) ]]; then
+        echo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}"
+    fi
+}
+
+# Try to find a GitHub repo via upstream package registries when formula URLs don't point to GitHub
+find_github_repo_via_registry() {
+    local stable_url="$1" name="$2"
+    local repo_url=""
+
+    # npm
+    if [[ "$stable_url" =~ registry\.npmjs\.org/([^/]+)/ ]]; then
+        local pkg="${BASH_REMATCH[1]}"
+        repo_url=$(curl -sf "https://registry.npmjs.org/$pkg" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('repository',{}).get('url',''))" 2>/dev/null)
+
+    # PyPI (files.pythonhosted.org or pypi.org)
+    elif [[ "$stable_url" =~ (files\.pythonhosted\.org|pypi\.org) ]]; then
+        local pkg="$name"
+        repo_url=$(curl -sf "https://pypi.org/pypi/$pkg/json" \
+            | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+urls=d.get('info',{}).get('project_urls',{}) or {}
+for v in urls.values():
+    if 'github.com' in (v or ''):
+        print(v); break
+" 2>/dev/null)
+    fi
+
+    extract_github_repo "$repo_url"
+}
+
+# Reads a JSON releases array from stdin, prints entries between $from and $to
+print_releases() {
+    local from="$1" to="$2" repo="$3"
+    python3 -c '
+import sys, json
+
+from_ver, to_ver, repo = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def norm(v):
+    """Extract semantic version, handling v-prefix and pkg@ver monorepo tags."""
+    if "@" in v:
+        v = v.rsplit("@", 1)[-1]
+    return v.lstrip("v")
+
+releases = json.load(sys.stdin)
+collecting = False
+shown = 0
+
+for r in releases:
+    tag = r.get("tag_name", "")
+    # Skip scoped sub-package tags in monorepos (e.g. @scope/pkg@1.0.0)
+    if tag.startswith("@"):
+        continue
+    ver = norm(tag)
+    n_to = norm(to_ver)
+    n_from = norm(from_ver)
+
+    if not collecting:
+        if ver == n_to or tag in (to_ver, "v" + n_to):
+            collecting = True
+        else:
+            continue
+
+    if ver == n_from or tag in (from_ver, "v" + n_from):
+        break
+
+    body = (r.get("body") or "").strip() or "(no release notes)"
+    print(f"  [{tag}]")
+    for line in body.splitlines():
+        print(f"  {line}")
+    print()
+    shown += 1
+
+if not collecting:
+    print(f"  Release {to_ver} not found in latest 100 GitHub releases.")
+    print(f"  View: https://github.com/{repo}/releases")
+elif shown == 0:
+    print(f"  No intermediate releases found between {from_ver} and {to_ver}.")
+    print(f"  View: https://github.com/{repo}/releases")
+' "$from" "$to" "$repo"
+}
+
+show_changelog() {
+    local name="$1" from="$2" to="$3"
+
+    local info homepage stable_url gh_repo
+    info=$(brew info --json=v2 "$name" 2>/dev/null) || { echo "  Could not get formula info."; return; }
+    homepage=$(echo "$info" | jq -r '.formulae[0].homepage // ""')
+    stable_url=$(echo "$info" | jq -r '.formulae[0].urls.stable.url // ""')
+
+    gh_repo=""
+    for url in "$stable_url" "$homepage"; do
+        gh_repo=$(extract_github_repo "$url")
+        [[ -n "$gh_repo" ]] && break
+    done
+
+    if [[ -z "$gh_repo" ]]; then
+        gh_repo=$(find_github_repo_via_registry "$stable_url" "$name")
+    fi
+
+    if [[ -z "$gh_repo" ]]; then
+        printf '  No GitHub repository detected.\n'
+        [[ -n "$homepage" ]] && printf '  Homepage: %s\n' "$homepage"
+        return
+    fi
+
+    local releases count
+    if ! releases=$(github_api "https://api.github.com/repos/$gh_repo/releases?per_page=100"); then
+        printf '  Could not fetch releases (rate limited? Set GITHUB_TOKEN).\n'
+        printf '  View: https://github.com/%s/releases\n' "$gh_repo"
+        return
+    fi
+
+    count=$(echo "$releases" | jq 'length')
+    if [[ "$count" -eq 0 ]]; then
+        printf '  No GitHub releases found (project may use tags only).\n'
+        printf '  View tags: https://github.com/%s/tags\n' "$gh_repo"
+        return
+    fi
+
+    echo "$releases" | print_releases "$from" "$to" "$gh_repo"
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+declare -a entries=()
+
+if [[ $# -gt 0 ]]; then
+    for pkg in "$@"; do
+        local_ver=$(brew list --versions "$pkg" 2>/dev/null | awk '{print $NF}')
+        if [[ -z "$local_ver" ]]; then
+            printf '%sWarning:%s %s is not installed\n' "$YELLOW" "$RESET" "$pkg" >&2
+            continue
+        fi
+        latest=$(brew info --json=v2 "$pkg" 2>/dev/null | jq -r '.formulae[0].versions.stable // ""')
+        if [[ -z "$latest" || "$local_ver" == "$latest" ]]; then
+            printf '%s is up to date (%s)\n' "$pkg" "$local_ver"
+            continue
+        fi
+        entries+=("$pkg $local_ver $latest")
+    done
+else
+    while IFS= read -r line; do
+        entries+=("$line")
+    done < <(brew outdated --json=v2 | jq -r '.formulae[] | "\(.name) \(.installed_versions[0]) \(.current_version)"')
+fi
+
+if [[ ${#entries[@]} -eq 0 ]]; then
+    echo "All packages are up to date."
+    exit 0
+fi
+
+for entry in "${entries[@]}"; do
+    read -r name from to <<< "$entry"
+    heading=$(printf '%s● %s  %s%s -> %s' "$CYAN" "$name" "$DIM$from$RESET" "" "$BOLD$to$RESET")
+    printf '\n%s\n' "$heading"
+    # underline the heading (strip ANSI codes to measure printable width)
+    width=$(printf '%s● %s  %s -> %s' "" "$name" "$from" "$to" | wc -m | tr -d ' ')
+    printf '%s%*s%s\n\n' "$DIM" "$width" "" "$RESET" | tr ' ' '─'
+    show_changelog "$name" "$from" "$to"
+done
