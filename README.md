@@ -24,14 +24,6 @@ brew changelog [formula ...]
 
 ## Installation
 
-### Via Homebrew (recommended)
-
-```sh
-brew install iturgeon/tap/brew-changelog
-```
-
-> Tap not yet published - use the manual method below.
-
 ### Manual
 
 Download and place `brew-changelog` anywhere on your `PATH`. The standard Homebrew bin directory works well:
