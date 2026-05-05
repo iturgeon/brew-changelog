@@ -1,4 +1,4 @@
-# brew-changelog
+# Brew Changelog
 
 A Homebrew external command that shows changelogs between your currently installed package versions and the latest available versions.
 
